@@ -75,26 +75,27 @@ def Extrap1d(x, y):
     return func
 
 
-def efficiency_q_over_chi(zs, pzs, cosmo, form="func", zl_max=None, zl_bin=800):
-    """Gets lensing efficiency.
+def efficiency_q_over_chi(zs, pzs, cosmo, form="func", zl_bin=800):
+    """Estimates lensing efficiency for a source galaxy redshift distribution
 
     Args:
         zs (ndarray):           source redshift
         pzs (ndarray):          source redshift distribution
         cosmo (cosmo):          astropy cosmology instance
+        form (str):             the form of efficiency, "func" or "ndarray"
+        zl_bin (int):           number of redshift bins
+
     Returns:
         q_over_chi (ndarray):   lensing efficiency divided by comoving
                                 distance at lens redshift.
     """
-    if zl_max is None:
-        zl_max = zs.max()
-    zl = np.linspace(1e-4, zl_max, zl_bin)
+    zl_max = zs.max() * 1.05
+    zl = np.linspace(1e-5, zl_max, zl_bin)
     chil = cosmo.comoving_distance(zl).value
     H0 = cosmo.H0.value / 3e5  # [1/Mpc]
     prefactor = 3.0 / 2.0 * cosmo.Om0 * H0**2 * (1 + zl)
 
     # integrate of nz
-    # pzs_norm = simps(pzs, zs)
     pzs_norm = np.sum(pzs)
     chis = cosmo.comoving_distance(zs).value
 
@@ -107,8 +108,10 @@ def efficiency_q_over_chi(zs, pzs, cosmo, form="func", zl_max=None, zl_bin=800):
 
     if form == "func":
         return ius(chil, q / chil, ext=3)
-    elif form == "arr":
+    elif form == "ndarray":
         return q / chil
+    else:
+        raise ValueError("form should be 'func' or 'ndarray'!")
 
 
 def get_pk_limber(l, chil, pkfunc_list):
@@ -227,7 +230,12 @@ def angular_power_spectrum(
 
 
 def angular_power_spectrum_finite_shell(
-    l, cosmo, linear_model, q1_over_chi_func, q2_over_chi_func, halofit,
+    l,
+    cosmo,
+    linear_model,
+    q1_over_chi_func,
+    q2_over_chi_func,
+    halofit,
     n_shell=38,
 ):
     """Computes angular power spectrum of cosmic shear.
@@ -288,6 +296,23 @@ def angular_power_spectrum_finite_shell(
     return cl
 
 
+def correct_sim_resolution(l, cl, nside=8192):
+    """Corrects resolution effect in the simulation
+
+    Args:
+        l (ndarray):    array of ells
+        cl (ndarray):   angular power spectrum at l
+        nside (int):    nside of the healpix used for simulation
+    Returns:
+        cl_corr (ndarray):  corrected angular power spectrum
+    """
+    l_sim = 1.6 * nside
+    cl_corr = cl.copy() / (1 + (l / l_sim) ** 2)
+    sel = 3 * nside < l
+    cl_corr[sel] = 0.0
+    return cl_corr
+
+
 def cl2xipm(l, cl, N_extrap_low=0, N_extrap_high=None):
     """Converts cl to xi_{+/-} using fftlog.
 
@@ -346,10 +371,28 @@ class camb_class:
         ns = cparam[4]
         w = cparam[5]
 
+        cosmo_params = {
+            "H0": H0,
+            "ombh2": ombh2,
+            "omch2": omch2,
+            "mnu": mnu,
+            "omk": omk,
+        }
+        pow_params = {
+            "As": As,
+            "ns": ns,
+        }
+        DE_params = {
+            "w": w,
+            "cs2": 1.0,
+            "wa": 0,
+            "dark_energy_model": "fluid",
+        }
+
         self.pars = camb.CAMBparams()
-        self.pars.set_cosmology(H0=H0, ombh2=ombh2, omch2=omch2, mnu=mnu, omk=omk)
-        self.pars.InitPower.set_params(As=As, ns=ns)
-        self.pars.set_dark_energy(w=w, cs2=1.0, wa=0, dark_energy_model="fluid")
+        self.pars.set_cosmology(**cosmo_params)
+        self.pars.InitPower.set_params(**pow_params)
+        self.pars.set_dark_energy(**DE_params)
         self.cparam = cparam
         self.mnu = mnu
         self.omk = omk
